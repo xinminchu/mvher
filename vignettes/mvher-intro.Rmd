@@ -1,0 +1,257 @@
+---
+title: "Getting Started with mvher"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Getting Started with mvher}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment  = "#>"
+)
+```
+
+## Overview
+
+**mvher** provides principled missing-value handling for entity resolution (ER)
+and record linkage pipelines.  The core problem: standard string-similarity
+metrics (Jaro-Winkler, Levenshtein) treat two empty strings as *perfectly
+matching* (`sim = 1`), which sends a spurious "definitely a match" signal to
+the classifier for pairs where both records lack a field.
+
+`mvher` offers:
+
+- **Eight field-comparison strategies** controlling how empty/NA fields are
+  scored during pairwise comparison.
+- **Seven feature-matrix imputation strategies** for filling residual NAs
+  after feature extraction.
+- **Four diagnostic functions** for measuring and classifying missingness.
+- A **strategy recommendation engine** that suggests the best approach
+  given your data profile.
+
+```{r setup}
+library(mvher)
+```
+
+---
+
+## 1. Diagnosing missingness
+
+Build a synthetic six-record dataset with structured missingness:
+
+```{r make-data}
+records <- data.frame(
+  id        = 1:6,
+  entity_id = c(1L, 1L, 2L, 2L, 3L, 3L),
+  name      = c("Alice Smith", "Alice Smyth", NA,    "Bob Jones", "",      "Carol White"),
+  city      = c("London",      "Londen",      "Paris", NA,         "Rome",  "Roma"),
+  stringsAsFactors = FALSE
+)
+```
+
+### Field-level summary
+
+```{r field-summary}
+mv_field_summary(records, c("name", "city"))
+```
+
+### Pair-level summary
+
+```{r pair-summary}
+pairs <- data.frame(id1 = c(1, 2, 3, 5), id2 = c(2, 4, 4, 6))
+mv_pair_summary(records, pairs, c("name", "city"))
+```
+
+### Missingness mechanism
+
+```{r mech}
+mv_detect_mechanism(records, c("name", "city"))
+```
+
+### Entity-level ICC
+
+High ICC indicates that whole entities tend to be missing (MNAR-like pattern),
+which creates covariate shift under entity-disjoint train/test splits:
+
+```{r icc}
+mv_entity_correlation(records, c("name", "city"))
+```
+
+---
+
+## 2. Choosing a strategy
+
+### Strategy overview table
+
+```{r strat-table}
+tbl <- mv_strategy_table()
+tbl[tbl$type == "field-comparison", c("strategy", "handles_mnar", "adds_features", "description")]
+```
+
+### Automatic recommendation
+
+```{r recommend}
+# Moderate missingness with high entity-level correlation under entity-disjoint split
+rec <- mv_recommend(field_miss_rate = 0.25, entity_corr = 0.6, split_type = "entity")
+print(rec)
+```
+
+---
+
+## 3. Field-comparison strategies
+
+All eight strategies are accessed through `mv_compare_fields()` (vector-level)
+or `mv_pair_features()` (pair-level feature matrix).
+
+```{r compare-demo}
+xa <- c("Alice Smith", "Bob Jones", "",     "")
+xb <- c("Alice Smyth", "Robert J.", "Carol", "")
+
+# Default (semantically wrong: both-empty → sim=1)
+mv_compare_fields(xa, xb, method = "current")$jw
+
+# Neutral: both-empty → 0.5
+mv_compare_fields(xa, xb, method = "neutral")$jw
+
+# Zero: any-empty → 0
+mv_compare_fields(xa, xb, method = "zero")$jw
+
+# Asymmetric: both-empty=0, one-empty=0.5
+mv_compare_fields(xa, xb, method = "asymmetric")$jw
+
+# Fellegi-Sunter integer gamma levels
+mv_compare_fields(xa, xb, method = "fellegi_sunter")$gamma
+```
+
+### Building a feature matrix
+
+```{r pair-features}
+feats_neutral <- mv_pair_features(records, pairs,
+                                  text_cols = c("name", "city"),
+                                  method    = "neutral")
+feats_neutral$X  # JW + LV for each column, 4 features total
+feats_neutral$y  # match labels
+
+feats_full <- mv_pair_features(records, pairs,
+                               text_cols = c("name", "city"),
+                               method    = "full")
+names(feats_full$X)  # includes _any_miss and _both_miss indicator columns
+```
+
+---
+
+## 4. Feature-matrix imputation
+
+After extracting features (especially with `"complete_cases"` or `"indicator"`
+methods that can leave NAs), use the imputer to fill residual missing values.
+
+The two-step API (fit on training, apply to both) prevents data leakage:
+
+```{r impute-two-step}
+# Simulate a feature matrix with some residual NAs
+Xtr <- data.frame(jw = c(0.9, NA, 0.3, 0.8), lv = c(NA, 0.7, 0.5, NA))
+Xte <- data.frame(jw = c(NA, 0.6),            lv = c(0.4, NA))
+
+# Fit on training data only
+imp <- mv_fit_imputer(Xtr, strategy = "mean")
+print(imp)
+
+# Apply to both
+Xtr_clean <- mv_apply_imputer(Xtr, imp)
+Xte_clean <- mv_apply_imputer(Xte, imp)  # uses training means, not test means
+Xtr_clean
+Xte_clean
+```
+
+Or use the one-step convenience wrapper:
+
+```{r impute-one-step}
+res <- mv_impute(Xtr, Xte, strategy = "median")
+res$X_train
+res$X_test
+```
+
+### Available strategies
+
+```{r strat-impute}
+mv_strategy_table()[mv_strategy_table()$type == "imputation",
+                    c("strategy", "handles_mar", "computation_cost", "description")]
+```
+
+---
+
+## 5. End-to-end mini-example
+
+```{r e2e}
+# Records: 8 entities x 3 records each, some missing names
+set.seed(42)
+n <- 24
+d <- data.frame(
+  id        = seq_len(n),
+  entity_id = rep(1:8, each = 3L),
+  name      = ifelse(runif(n) < 0.2, NA_character_,
+                     paste0(sample(c("Smith","Jones","Brown","White"), n, TRUE),
+                            " ",
+                            sample(c("Alice","Bob","Carol","Dan"), n, TRUE))),
+  city      = ifelse(runif(n) < 0.15, "", sample(c("London","Paris","Rome"), n, TRUE)),
+  stringsAsFactors = FALSE
+)
+
+# Step 1: Diagnose
+cat("Field missingness:\n")
+print(mv_field_summary(d, c("name", "city")))
+
+# Step 2: Recommend strategy
+rec <- mv_recommend(
+  field_miss_rate = c(0.20, 0.15),
+  entity_corr     = NULL,
+  split_type      = "entity"
+)
+cat("\nRecommendation:", rec$field_method, "/", rec$imputer_strategy, "\n")
+
+# Step 3: Train/test entity split (70/30)
+set.seed(1)
+ents     <- unique(d$entity_id)
+test_ent <- sample(ents, floor(0.3 * length(ents)))
+d_tr     <- d[!d$entity_id %in% test_ent, ]
+d_te     <- d[ d$entity_id %in% test_ent, ]
+
+# Step 4: Make all candidate pairs within each split
+make_all_pairs <- function(ids) {
+  ids <- sort(unique(ids)); n <- length(ids)
+  if (n < 2) return(data.frame(id1 = integer(), id2 = integer()))
+  data.frame(id1 = rep(ids[-n], times = rev(seq_len(n - 1))),
+             id2 = unlist(lapply(2:n, function(i) ids[i:n])))
+}
+pairs_tr <- make_all_pairs(d_tr$id)
+pairs_te <- make_all_pairs(d_te$id)
+
+# Step 5: Extract features with recommended method
+ftr <- mv_pair_features(d_tr, pairs_tr, c("name", "city"), method = rec$field_method)
+fte <- mv_pair_features(d_te, pairs_te, c("name", "city"), method = rec$field_method)
+
+# Step 6: Impute feature matrices
+res <- mv_impute(ftr$X, fte$X, strategy = rec$imputer_strategy)
+
+cat("\nTrain feature matrix (first 3 rows):\n")
+print(head(res$X_train, 3))
+cat("\nTrain label distribution:", table(ftr$y), "\n")
+```
+
+---
+
+## Summary of strategy selection rules
+
+| Condition | Recommended `method` | Recommended `strategy` |
+|---|---|---|
+| < 2% missingness | `"current"` | `"mean"` |
+| Entity-disjoint split + ICC > 0.3 | `"full"` | `"mean"` |
+| ≥ 15% missingness | `"neutral"` | `"mean"` |
+| Unknown / low missingness | `"neutral"` | `"mean"` |
+| Tree-based model | `"indicator"` | `"none"` |
+| Strict Fellegi-Sunter model | `"fellegi_sunter"` | `"none"` |
+
+See `mv_strategy_table()` for a complete comparison of all 15 strategies.
