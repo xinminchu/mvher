@@ -51,6 +51,15 @@ mv_fit_imputer <- function(X,
                                         "hot_deck", "knn", "none"),
                            k    = 5L,
                            seed = 1L) {
+  if (identical(strategy, "zero_impute")) {
+    warning("strategy=\"zero_impute\" is deprecated; use \"zero\"",
+            call. = FALSE)
+    strategy <- "zero"
+  } else if (identical(strategy, "half_impute")) {
+    warning("strategy=\"half_impute\" is deprecated; use \"half\"",
+            call. = FALSE)
+    strategy <- "half"
+  }
   strategy  <- match.arg(strategy)
   X         <- as.data.frame(X)
   col_names <- names(X)
@@ -83,8 +92,15 @@ mv_fit_imputer <- function(X,
     },
 
     knn = {
-      complete <- X[complete.cases(X), , drop = FALSE]
-      list(complete_rows = complete, k = as.integer(k), seed = as.integer(seed))
+      complete  <- X[complete.cases(X), , drop = FALSE]
+      col_means <- vapply(X, function(col) {
+        v <- mean(col, na.rm = TRUE)
+        if (is.nan(v) || is.na(v)) 0 else v
+      }, numeric(1))
+      list(complete_rows = complete,
+           col_means     = col_means,
+           k             = as.integer(k),
+           seed          = as.integer(seed))
     },
 
     none = setNames(as.list(rep(NA_real_, length(col_names))), col_names)
@@ -159,14 +175,22 @@ mv_apply_imputer <- function(X, imputer) {
   if (strategy == "knn") {
     complete_rows <- fills$complete_rows
     k_use         <- fills$k %||% imputer$k
+    col_means     <- fills$col_means %||%
+                     setNames(rep(0, ncol(X2)), names(X2))
+
     if (is.null(complete_rows) || nrow(complete_rows) == 0) {
-      # Fallback: zero-fill when no complete training rows exist
+      # Fallback: column-mean fill when no complete training rows exist
       for (nm in names(X2)) {
         nas <- which(is.na(X2[[nm]]))
-        if (length(nas) > 0) data.table::set(X2, nas, nm, 0)
+        fv  <- if (nm %in% names(col_means)) col_means[[nm]] else 0
+        if (length(nas) > 0) data.table::set(X2, nas, nm, fv)
       }
       return(X2)
     }
+
+    fill_counts        <- integer(ncol(X2))
+    names(fill_counts) <- names(X2)
+    fallback_count     <- 0L
 
     incomplete_rows <- which(!complete.cases(as.data.frame(X2)))
     X2_df   <- as.data.frame(X2)
@@ -174,12 +198,23 @@ mv_apply_imputer <- function(X, imputer) {
 
     for (ri in incomplete_rows) {
       row_vec   <- as.numeric(X2_df[ri, , drop = TRUE])
-      avail_idx <- which(!is.na(row_vec))          # columns with observed values
+      avail_idx <- which(!is.na(row_vec))
       na_idx    <- which(is.na(row_vec))
 
-      if (length(avail_idx) == 0 || length(na_idx) == 0) next
+      if (length(na_idx) == 0) next
 
-      # Distance based on available columns only
+      if (length(avail_idx) == 0) {
+        # All-NA row: fall back to column means
+        for (ni in na_idx) {
+          nm <- names(X2)[ni]
+          fv <- if (nm %in% names(col_means)) col_means[[nm]] else 0
+          data.table::set(X2, ri, nm, fv)
+          fill_counts[[nm]] <- fill_counts[[nm]] + 1L
+        }
+        fallback_count <- fallback_count + 1L
+        next
+      }
+
       cmp_sub <- cmp_mat[, avail_idx, drop = FALSE]
       row_sub <- row_vec[avail_idx]
       dists   <- rowSums(sweep(cmp_sub, 2, row_sub, "-")^2)
@@ -188,11 +223,30 @@ mv_apply_imputer <- function(X, imputer) {
 
       for (ni in na_idx) {
         nm <- names(X2)[ni]
-        if (!is.na(imp_row[ni])) {
-          data.table::set(X2, ri, nm, imp_row[ni])
-        }
+        fv <- if (!is.nan(imp_row[ni]) && !is.na(imp_row[ni]))
+                imp_row[ni]
+              else if (nm %in% names(col_means))
+                col_means[[nm]]
+              else 0
+        data.table::set(X2, ri, nm, fv)
+        fill_counts[[nm]] <- fill_counts[[nm]] + 1L
       }
     }
+
+    # Final backstop: fill any residual NAs with column means
+    for (nm in names(X2)) {
+      nas <- which(is.na(X2[[nm]]))
+      if (length(nas) > 0) {
+        fv <- if (nm %in% names(col_means)) col_means[[nm]] else 0
+        data.table::set(X2, nas, nm, fv)
+        fill_counts[[nm]] <- fill_counts[[nm]] + length(nas)
+      }
+    }
+
+    attr(X2, "imputation_report") <- list(
+      fill_counts    = fill_counts,
+      fallback_count = fallback_count
+    )
     return(X2)
   }
 
@@ -234,6 +288,15 @@ mv_impute <- function(X_train, X_test = NULL,
                                    "hot_deck", "knn", "none"),
                       k    = 5L,
                       seed = 1L) {
+  if (identical(strategy, "zero_impute")) {
+    warning("strategy=\"zero_impute\" is deprecated; use \"zero\"",
+            call. = FALSE)
+    strategy <- "zero"
+  } else if (identical(strategy, "half_impute")) {
+    warning("strategy=\"half_impute\" is deprecated; use \"half\"",
+            call. = FALSE)
+    strategy <- "half"
+  }
   strategy <- match.arg(strategy)
   imp      <- mv_fit_imputer(X_train, strategy = strategy, k = k, seed = seed)
   Xtr_imp  <- mv_apply_imputer(X_train, imp)

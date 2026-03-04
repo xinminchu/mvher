@@ -61,12 +61,13 @@ mv_field_summary <- function(d, text_cols) {
 #' pairs <- data.frame(id1 = c(1, 2, 3), id2 = c(2, 3, 4))
 #' mv_pair_summary(d, pairs, "name")
 mv_pair_summary <- function(d, pairs, text_cols) {
-  d <- data.table::as.data.table(d)
+  d <- data.table::copy(data.table::as.data.table(d))
   p <- data.table::as.data.table(pairs)
   .check_text_cols(d, text_cols)
   .check_pairs(p)
 
   if (!"id" %in% names(d)) stop("d must have an 'id' column", call. = FALSE)
+  if (nrow(p) > 0L) .check_ids(d, p)
   data.table::setkey(d, id)
 
   a <- d[.(p$id1)]

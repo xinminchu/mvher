@@ -65,13 +65,17 @@
 mv_compare_fields <- function(xa, xb,
                               method = c("current", "neutral", "zero",
                                          "indicator", "full",
-                                         "fellegi_sunter", "complete_cases",
+                                         "fellegi_sunter",
+                                         "complete_cases",
                                          "asymmetric"),
-                              jw_p     = 0.1,
+                              jw_p      = 0.1,
                               fs_breaks = c(0.25, 0.60, 0.85)) {
   method <- match.arg(method)
-  xa <- as.character(xa); xb <- as.character(xb)
-  xa[is.na(xa)] <- ""; xb[is.na(xb)] <- ""
+  if (method == "fellegi_sunter") .check_fs_breaks(fs_breaks)
+  xa <- as.character(xa)
+  xb <- as.character(xb)
+  xa[is.na(xa)] <- ""
+  xb[is.na(xb)] <- ""
 
   miss_a <- xa == ""
   miss_b <- xb == ""
@@ -92,29 +96,37 @@ mv_compare_fields <- function(xa, xb,
 
   if (method == "fellegi_sunter") {
     gamma <- integer(length(jw_raw))
-    gamma[any_m]                                          <- 0L
-    gamma[!any_m & jw_raw <  fs_breaks[1]]               <- 1L
-    gamma[!any_m & jw_raw >= fs_breaks[1] & jw_raw < fs_breaks[2]] <- 2L
-    gamma[!any_m & jw_raw >= fs_breaks[2] & jw_raw < fs_breaks[3]] <- 3L
-    gamma[!any_m & jw_raw >= fs_breaks[3]]               <- 4L
+    gamma[any_m]                                              <- 0L
+    gamma[!any_m & jw_raw < fs_breaks[1]]                    <- 1L
+    gamma[!any_m & jw_raw >= fs_breaks[1] &
+            jw_raw < fs_breaks[2]]                           <- 2L
+    gamma[!any_m & jw_raw >= fs_breaks[2] &
+            jw_raw < fs_breaks[3]]                           <- 3L
+    gamma[!any_m & jw_raw >= fs_breaks[3]]                   <- 4L
     result$jw    <- gamma   # reuse slot for the gamma encoding
     result$lv    <- NULL
     result$gamma <- gamma
     return(result)
   }
 
-  jw <- jw_raw; lv <- lv_raw
+  jw <- jw_raw
+  lv <- lv_raw
 
-  if (method == "neutral" || method == "full") {
-    jw[any_m] <- 0.5; lv[any_m] <- 0.5
+  if (method %in% c("neutral", "full")) {
+    jw[any_m] <- 0.5
+    lv[any_m] <- 0.5
   } else if (method == "zero") {
-    jw[any_m] <- 0.0; lv[any_m] <- 0.0
+    jw[any_m] <- 0.0
+    lv[any_m] <- 0.0
   } else if (method == "complete_cases") {
-    jw[any_m] <- NA_real_; lv[any_m] <- NA_real_
+    jw[any_m] <- NA_real_
+    lv[any_m] <- NA_real_
   } else if (method == "asymmetric") {
-    only_one_m    <- any_m & !both_m
-    jw[both_m]    <- 0.0; lv[both_m]    <- 0.0
-    jw[only_one_m] <- 0.5; lv[only_one_m] <- 0.5
+    only_one_m     <- any_m & !both_m
+    jw[both_m]     <- 0.0
+    lv[both_m]     <- 0.0
+    jw[only_one_m] <- 0.5
+    lv[only_one_m] <- 0.5
   }
   # "current" and "indicator": leave jw/lv as computed
 
@@ -173,64 +185,97 @@ mv_compare_fields <- function(xa, xb,
 mv_pair_features <- function(d, pairs, text_cols,
                              method = c("current", "neutral", "zero",
                                         "indicator", "full",
-                                        "fellegi_sunter", "complete_cases",
+                                        "fellegi_sunter",
+                                        "complete_cases",
                                         "asymmetric"),
-                             similarity  = c("both", "jw", "lv"),
-                             chunk_size  = NULL,
-                             jw_p        = 0.1,
-                             fs_breaks   = c(0.25, 0.60, 0.85)) {
+                             similarity = c("both", "jw", "lv"),
+                             chunk_size = NULL,
+                             jw_p       = 0.1,
+                             fs_breaks  = c(0.25, 0.60, 0.85)) {
   method     <- match.arg(method)
   similarity <- match.arg(similarity)
-  d     <- data.table::as.data.table(d)
+
+  # --- Copy to avoid setkey() modifying the caller's data.table in-place ---
+  d     <- data.table::copy(data.table::as.data.table(d))
   pairs <- data.table::as.data.table(pairs)
+
+  # --- Validate inputs upfront (once, before any chunking) -----------------
+  if (!"id" %in% names(d)) {
+    stop("d must have an 'id' column", call. = FALSE)
+  }
+  if (!"entity_id" %in% names(d)) {
+    stop("d must have an 'entity_id' column", call. = FALSE)
+  }
   .check_text_cols(d, text_cols)
   .check_pairs(pairs)
-  if (!"id" %in% names(d))        stop("d must have an 'id' column", call. = FALSE)
-  if (!"entity_id" %in% names(d)) stop("d must have an 'entity_id' column", call. = FALSE)
+  if (nrow(pairs) > 0L) .check_ids(d, pairs)
+  if (method == "fellegi_sunter") .check_fs_breaks(fs_breaks)
 
-  if (nrow(pairs) == 0) {
+  if (nrow(pairs) == 0L) {
     return(list(X = data.table::data.table(), y = integer()))
   }
 
-  # Chunked processing to bound peak memory for large pair sets
+  # --- Pre-normalise text columns once (lowercase, trim, NA -> "") ----------
+  for (col in text_cols) {
+    data.table::set(d, j = col, value = norm_str(d[[col]]))
+  }
+
+  # --- Key once; chunked iteration reuses this keyed table -----------------
+  data.table::setkey(d, id)
+
   if (!is.null(chunk_size) && nrow(pairs) > chunk_size) {
-    n <- nrow(pairs); chunks <- ceiling(n / chunk_size)
-    Xs <- vector("list", chunks); ys <- vector("list", chunks)
+    n      <- nrow(pairs)
+    chunks <- ceiling(n / chunk_size)
+    x_list <- vector("list", chunks)
+    y_list <- vector("list", chunks)
     for (i in seq_len(chunks)) {
       i1 <- (i - 1L) * chunk_size + 1L
       i2 <- min(i * chunk_size, n)
-      tmp <- mv_pair_features(d, pairs[i1:i2], text_cols,
-                              method = method, similarity = similarity,
-                              chunk_size = NULL, jw_p = jw_p,
-                              fs_breaks = fs_breaks)
-      Xs[[i]] <- tmp$X; ys[[i]] <- tmp$y
+      tmp          <- .features_chunk(d, pairs[i1:i2], text_cols,
+                                      method, similarity,
+                                      jw_p, fs_breaks)
+      x_list[[i]] <- tmp$X
+      y_list[[i]] <- tmp$y
     }
-    return(list(X = data.table::rbindlist(Xs, fill = TRUE), y = unlist(ys)))
+    return(list(
+      X = data.table::rbindlist(x_list, fill = TRUE),
+      y = unlist(y_list)
+    ))
   }
 
-  data.table::setkey(d, id)
+  .features_chunk(d, pairs, text_cols, method, similarity, jw_p, fs_breaks)
+}
+
+
+# Internal: compute features for one (possibly chunked) slice of pairs.
+# Assumes d is already setkey'd on 'id' and text_cols are pre-normalised.
+.features_chunk <- function(d, pairs, text_cols,
+                            method, similarity, jw_p, fs_breaks) {
   a <- d[.(pairs$id1)]
   b <- d[.(pairs$id2)]
   y <- as.integer(a$entity_id == b$entity_id)
 
-  X_list <- list()
+  x_cols <- list()
   for (col in text_cols) {
-    xa <- a[[col]]; xb <- b[[col]]
-    cmp <- mv_compare_fields(xa, xb, method = method,
-                             jw_p = jw_p, fs_breaks = fs_breaks)
-
+    cmp <- mv_compare_fields(a[[col]], b[[col]],
+                             method    = method,
+                             jw_p      = jw_p,
+                             fs_breaks = fs_breaks)
     if (method == "fellegi_sunter") {
-      X_list[[paste0(col, "_gamma")]] <- cmp$gamma
+      x_cols[[paste0(col, "_gamma")]] <- cmp$gamma
     } else {
-      if (similarity %in% c("both", "jw")) X_list[[paste0(col, "_jw")]] <- cmp$jw
-      if (similarity %in% c("both", "lv")) X_list[[paste0(col, "_lv")]] <- cmp$lv
+      if (similarity %in% c("both", "jw")) {
+        x_cols[[paste0(col, "_jw")]] <- cmp$jw
+      }
+      if (similarity %in% c("both", "lv")) {
+        x_cols[[paste0(col, "_lv")]] <- cmp$lv
+      }
     }
-
     if (method %in% c("indicator", "full")) {
-      X_list[[paste0(col, "_any_miss")]]  <- as.integer(cmp$any_miss)
-      X_list[[paste0(col, "_both_miss")]] <- as.integer(cmp$both_miss)
+      x_cols[[paste0(col, "_any_miss")]]  <- as.integer(cmp$any_miss)
+      x_cols[[paste0(col, "_both_miss")]] <- as.integer(cmp$both_miss)
     }
   }
 
-  list(X = data.table::as.data.table(X_list), y = y)
+  list(X = data.table::as.data.table(x_cols), y = y)
 }

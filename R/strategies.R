@@ -37,7 +37,7 @@ mv_strategy_table <- function() {
       "current", "neutral", "zero", "asymmetric",
       "indicator", "full", "fellegi_sunter", "complete_cases",
       # --- feature-matrix imputation ---
-      "mean", "median", "zero_impute", "half_impute",
+      "mean", "median", "zero", "half",
       "hot_deck", "knn",
       # --- no-imputation / model-level ---
       "none"
@@ -143,10 +143,14 @@ mv_recommend <- function(field_miss_rate,
                          entity_corr    = NULL,
                          has_entity_ids = TRUE,
                          split_type     = c("entity", "record")) {
-  split_type   <- match.arg(split_type)
-  overall_miss <- mean(as.numeric(field_miss_rate), na.rm = TRUE)
-  corr_val     <- if (is.null(entity_corr) || all(is.na(entity_corr))) 0
-                  else mean(as.numeric(entity_corr), na.rm = TRUE)
+  split_type          <- match.arg(split_type)
+  overall_miss        <- mean(as.numeric(field_miss_rate), na.rm = TRUE)
+  entity_corr_unknown <- is.null(entity_corr) || all(is.na(entity_corr))
+  corr_val            <- if (entity_corr_unknown) 0
+                         else mean(as.numeric(entity_corr), na.rm = TRUE)
+
+  # Imputer: knn for high missingness (better MAR handling), mean otherwise
+  base_imputer <- if (overall_miss >= 0.30) "knn" else "mean"
 
   # Decision tree
   if (overall_miss < 0.02) {
@@ -157,42 +161,68 @@ mv_recommend <- function(field_miss_rate,
       "Both-null=1 artefact affects fewer than 0.04% of pairs."
     )
 
-  } else if (split_type == "entity" && corr_val > 0.3) {
+  } else if (split_type == "entity" && has_entity_ids &&
+             !entity_corr_unknown && corr_val > 0.3) {
     field_method     <- "full"
-    imputer_strategy <- "mean"
+    imputer_strategy <- base_imputer
     rationale <- paste0(
-      "Entity-disjoint split with high entity-level ICC (", round(corr_val, 2), "). ",
+      "Entity-disjoint split with high entity-level ICC (",
+      round(corr_val, 2), "). ",
       "'full' (neutral sim=0.5 + missingness indicators) mitigates covariate ",
-      "shift caused by entity-correlated missingness: the model learns a negative ",
-      "weight for both_miss instead of receiving a spurious sim=1 signal. ",
-      "Mean imputation for any residual NAs in the feature matrix."
+      "shift caused by entity-correlated missingness: the model learns a ",
+      "negative weight for both_miss instead of receiving a spurious sim=1 ",
+      "signal. ",
+      if (base_imputer == "knn")
+        "KNN imputation recommended for high overall missingness (>=30%)."
+      else
+        "Mean imputation for any residual NAs in the feature matrix."
     )
 
   } else if (overall_miss >= 0.15) {
     field_method     <- "neutral"
-    imputer_strategy <- "mean"
+    imputer_strategy <- base_imputer
     rationale <- paste0(
       "Moderate-to-high missingness (", round(100 * overall_miss, 1), "%). ",
       "'neutral' (sim=0.5 on missing pairs) avoids the both-null=1 artefact ",
-      "without over-penalising pairs that differ only because one field is absent. ",
-      "Consider 'full' if the split is entity-disjoint and ICC > 0.3."
+      "without over-penalising pairs that differ only because one field is ",
+      "absent. ",
+      if (!has_entity_ids)
+        "Entity labels absent; ICC cannot be estimated. "
+      else if (entity_corr_unknown)
+        "ICC unknown; "
+      else
+        paste0("ICC=", round(corr_val, 2), "; "),
+      "Consider 'full' if the split is entity-disjoint and ICC > 0.3. ",
+      if (base_imputer == "knn")
+        "KNN imputation recommended for high missingness (>=30%)."
+      else
+        ""
     )
 
-  } else if (corr_val > 0.1 && split_type == "entity") {
+  } else if (!entity_corr_unknown && corr_val > 0.1 &&
+             split_type == "entity") {
     field_method     <- "neutral"
-    imputer_strategy <- "mean"
+    imputer_strategy <- base_imputer
     rationale <- paste0(
       "Low-moderate missingness with some entity-level correlation (ICC=",
       round(corr_val, 2), "). 'neutral' scoring recommended. ",
-      "Upgrade to 'full' if evaluation is entity-disjoint and ICC rises above 0.3."
+      "Upgrade to 'full' if evaluation is entity-disjoint and ICC rises ",
+      "above 0.3."
     )
 
   } else {
     field_method     <- "neutral"
-    imputer_strategy <- "mean"
+    imputer_strategy <- base_imputer
     rationale <- paste0(
-      "Low-moderate missingness. 'neutral' scoring (sim=0.5 on missing pairs) ",
-      "is a safe, principled default that avoids the both-null=1 artefact."
+      "Low-moderate missingness. 'neutral' scoring (sim=0.5 on missing ",
+      "pairs) is a safe, principled default that avoids the both-null=1 ",
+      "artefact.",
+      if (entity_corr_unknown && has_entity_ids)
+        " ICC unknown; run mv_entity_correlation() to refine this recommendation."
+      else if (!has_entity_ids)
+        " Entity labels absent; ICC-based refinement not possible."
+      else
+        ""
     )
   }
 

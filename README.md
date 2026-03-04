@@ -1,6 +1,6 @@
 # mvher — Missing Value Handling for Entity Resolution
 
-[![R package](https://img.shields.io/badge/R-package-blue)](https://github.com/yourusername/mvher)
+[![R package](https://img.shields.io/badge/R-package-blue)](https://github.com/xinminchu/mvher)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 `mvher` is a standalone R package that provides principled missing-value
@@ -54,7 +54,7 @@ entity-correlated (e.g., one data source consistently omits a field).
 ```r
 # Install from GitHub (recommended)
 # install.packages("remotes")
-remotes::install_github("yourusername/mvher")
+remotes::install_github("xinminchu/mvher")
 
 # Or install locally from the package directory
 devtools::install("path/to/mvher")
