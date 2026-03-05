@@ -111,7 +111,9 @@ mv_pair_summary <- function(d, pairs, text_cols) {
 #'     \item{\code{overall_miss_rate}}{Fraction of rows that are missing.}
 #'     \item{\code{entity_miss_variance}}{Variance of per-entity missingness rates.}
 #'     \item{\code{chi_sq_p}}{p-value from chi-squared test (simulated).}
-#'     \item{\code{mechanism}}{Either \code{"MCAR"} or \code{"MAR/MNAR"}.}
+#'     \item{\code{mechanism}}{\code{"MCAR"}, \code{"MAR/MNAR"}, or
+#'       \code{"unknown"} (test cannot be performed: all records present or
+#'       only one entity group).}
 #'   }
 #'
 #' @details
@@ -222,10 +224,10 @@ mv_entity_correlation <- function(d, text_cols, entity_col = "entity_id") {
     }
 
     ss_between <- sum(ent_ns * (ent_means - grand_mean)^2, na.rm = TRUE)
-    ss_within  <- sum(vapply(unique(entity), function(e) {
-      vals <- is_miss[entity == e]
-      sum((vals - mean(vals, na.rm = TRUE))^2, na.rm = TRUE)
-    }, numeric(1)), na.rm = TRUE)
+    group_ss   <- tapply(is_miss, entity, function(v) {
+      sum((v - mean(v, na.rm = TRUE))^2, na.rm = TRUE)
+    })
+    ss_within  <- sum(group_ss, na.rm = TRUE)
 
     ms_between <- ss_between / (k - 1)
     n0         <- (n_total - sum(ent_ns^2) / n_total) / (k - 1)

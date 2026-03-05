@@ -188,25 +188,46 @@ mv_apply_imputer <- function(X, imputer) {
       return(X2)
     }
 
+    # Align training matrix columns to those present in X2
+    train_cols  <- colnames(complete_rows)
+    shared_cols <- intersect(train_cols, names(X2))
+    if (length(shared_cols) == 0L) {
+      warning("knn: no shared columns between training and imputation data; ",
+              "falling back to column means.", call. = FALSE)
+      for (nm in names(X2)) {
+        nas <- which(is.na(X2[[nm]]))
+        fv  <- if (nm %in% names(col_means)) col_means[[nm]] else 0
+        if (length(nas) > 0) data.table::set(X2, nas, nm, fv)
+      }
+      return(X2)
+    }
+    if (!identical(shared_cols, train_cols)) {
+      warning("knn: column mismatch between training and imputation data; ",
+              "distance computed on shared columns only.", call. = FALSE)
+    }
+    complete_rows_shared <- complete_rows[, shared_cols, drop = FALSE]
+
     fill_counts        <- integer(ncol(X2))
     names(fill_counts) <- names(X2)
     fallback_count     <- 0L
 
     incomplete_rows <- which(!complete.cases(as.data.frame(X2)))
     X2_df   <- as.data.frame(X2)
-    cmp_mat <- as.matrix(complete_rows)
+    cmp_mat <- as.matrix(complete_rows_shared)
 
     for (ri in incomplete_rows) {
-      row_vec   <- as.numeric(X2_df[ri, , drop = TRUE])
-      avail_idx <- which(!is.na(row_vec))
-      na_idx    <- which(is.na(row_vec))
+      # Use full X2 row to find which cols are NA; subset to shared for distance
+      row_full  <- as.numeric(X2_df[ri, , drop = TRUE])
+      names(row_full) <- names(X2)
+      na_nms    <- names(X2)[is.na(row_full)]   # names of NA cols in X2
+      row_shared <- row_full[shared_cols]
+      avail_shared <- shared_cols[!is.na(row_shared)]
 
-      if (length(na_idx) == 0) next
+      if (length(na_nms) == 0) next
 
-      if (length(avail_idx) == 0) {
-        # All-NA row: fall back to column means
-        for (ni in na_idx) {
-          nm <- names(X2)[ni]
+      if (length(avail_shared) == 0) {
+        # All shared cols NA: fall back to column means
+        for (nm in na_nms) {
           fv <- if (nm %in% names(col_means)) col_means[[nm]] else 0
           data.table::set(X2, ri, nm, fv)
           fill_counts[[nm]] <- fill_counts[[nm]] + 1L
@@ -215,16 +236,17 @@ mv_apply_imputer <- function(X, imputer) {
         next
       }
 
-      cmp_sub <- cmp_mat[, avail_idx, drop = FALSE]
-      row_sub <- row_vec[avail_idx]
+      cmp_sub <- cmp_mat[, avail_shared, drop = FALSE]
+      row_sub <- row_shared[avail_shared]
       dists   <- rowSums(sweep(cmp_sub, 2, row_sub, "-")^2)
       nn_idx  <- order(dists)[seq_len(min(k_use, length(dists)))]
+      # imp_row is named by shared_cols; use name-based lookup below
       imp_row <- colMeans(cmp_mat[nn_idx, , drop = FALSE], na.rm = TRUE)
 
-      for (ni in na_idx) {
-        nm <- names(X2)[ni]
-        fv <- if (!is.nan(imp_row[ni]) && !is.na(imp_row[ni]))
-                imp_row[ni]
+      for (nm in na_nms) {
+        fv <- if (nm %in% names(imp_row) &&
+                  !is.nan(imp_row[[nm]]) && !is.na(imp_row[[nm]]))
+                imp_row[[nm]]
               else if (nm %in% names(col_means))
                 col_means[[nm]]
               else 0

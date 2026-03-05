@@ -17,7 +17,10 @@ mv_detect_mechanism(d, text_cols, entity_col = "entity_id", alpha = 0.05)
 }
 \value{
 A \code{data.table} with columns \code{column}, \code{overall_miss_rate},
-\code{entity_miss_variance}, \code{chi_sq_p}, \code{mechanism}.
+\code{entity_miss_variance}, \code{chi_sq_p}, and \code{mechanism}.
+\code{mechanism} is one of \code{"MCAR"}, \code{"MAR/MNAR"}, or
+\code{"unknown"} (when the chi-squared test cannot be performed, e.g.\ all
+records are present or only one entity group exists).
 }
 \details{
 A significant chi-squared p-value indicates that missingness is associated

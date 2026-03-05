@@ -1,0 +1,20 @@
+# R build artifacts
+*.Rcheck/
+*.tar.gz
+*.zip
+
+# R session files
+.RData
+.Rhistory
+.Rproj.user/
+
+# roxygen2 / pkgdown cache
+docs/
+Meta/
+
+# vignette build artifacts
+vignettes/*.html
+vignettes/*.pdf
+
+# testthat artefacts
+tests/testthat/*.pdf

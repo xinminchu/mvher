@@ -158,7 +158,8 @@ mv_recommend <- function(field_miss_rate,
     imputer_strategy <- "mean"
     rationale <- paste0(
       "Very low missingness (<2%): the 'current' default is safe. ",
-      "Both-null=1 artefact affects fewer than 0.04% of pairs."
+      "Assuming independent missingness, fewer than ~0.04% of pairs ",
+      "are affected by the both-null=1 artefact."
     )
 
   } else if (split_type == "entity" && has_entity_ids &&
@@ -192,11 +193,9 @@ mv_recommend <- function(field_miss_rate,
         "ICC unknown; "
       else
         paste0("ICC=", round(corr_val, 2), "; "),
-      "Consider 'full' if the split is entity-disjoint and ICC > 0.3. ",
+      "Consider 'full' if the split is entity-disjoint and ICC > 0.3.",
       if (base_imputer == "knn")
-        "KNN imputation recommended for high missingness (>=30%)."
-      else
-        ""
+        " KNN imputation recommended for high missingness (>=30%)."
     )
 
   } else if (!entity_corr_unknown && corr_val > 0.1 &&
