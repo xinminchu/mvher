@@ -115,6 +115,16 @@ mv_strategy_table <- function() {
 #'   train/test split) or \code{"record"} (random record split).  Entity-
 #'   disjoint splits are more sensitive to entity-correlated missingness.
 #'   Default \code{"entity"}.
+#' @param classifier Character.  Either \code{"linear"} (default, covers
+#'   logistic regression, SVMs, neural networks---any model that requires a
+#'   complete numeric feature matrix) or \code{"tree_native"} (tree-based
+#'   models such as \pkg{xgboost}, \pkg{lightgbm}, and \pkg{ranger} that
+#'   handle \code{NA}s natively via learned split directions or surrogate
+#'   splits).  When \code{"tree_native"}, the recommended
+#'   \code{imputer_strategy} is always \code{"none"}: residual \code{NA}s in
+#'   the feature matrix are left in place for the classifier to handle.
+#'   The field-comparison method is still chosen to avoid the both-null
+#'   artifact.
 #'
 #' @return A list of class \code{mvher_recommendation} with elements:
 #'   \describe{
@@ -139,11 +149,17 @@ mv_strategy_table <- function() {
 #'
 #' # Unknown entity correlation, moderate missingness
 #' mv_recommend(field_miss_rate = 0.20, entity_corr = NULL)
+#'
+#' # Native-MV tree classifier (e.g. xgboost) -- no imputation needed
+#' mv_recommend(field_miss_rate = 0.25, entity_corr = 0.6,
+#'              split_type = "entity", classifier = "tree_native")
 mv_recommend <- function(field_miss_rate,
                          entity_corr    = NULL,
                          has_entity_ids = TRUE,
-                         split_type     = c("entity", "record")) {
+                         split_type     = c("entity", "record"),
+                         classifier     = c("linear", "tree_native")) {
   split_type          <- match.arg(split_type)
+  classifier          <- match.arg(classifier)
   overall_miss        <- mean(as.numeric(field_miss_rate), na.rm = TRUE)
   entity_corr_unknown <- is.null(entity_corr) || all(is.na(entity_corr))
   corr_val            <- if (entity_corr_unknown) 0
@@ -159,7 +175,7 @@ mv_recommend <- function(field_miss_rate,
     rationale <- paste0(
       "Very low missingness (<2%): the 'current' default is safe. ",
       "Assuming independent missingness, fewer than ~0.04% of pairs ",
-      "are affected by the both-null=1 artefact."
+      "are affected by the both-null=1 artifact."
     )
 
   } else if (split_type == "entity" && has_entity_ids &&
@@ -184,7 +200,7 @@ mv_recommend <- function(field_miss_rate,
     imputer_strategy <- base_imputer
     rationale <- paste0(
       "Moderate-to-high missingness (", round(100 * overall_miss, 1), "%). ",
-      "'neutral' (sim=0.5 on missing pairs) avoids the both-null=1 artefact ",
+      "'neutral' (sim=0.5 on missing pairs) avoids the both-null=1 artifact ",
       "without over-penalising pairs that differ only because one field is ",
       "absent. ",
       if (!has_entity_ids)
@@ -215,13 +231,26 @@ mv_recommend <- function(field_miss_rate,
     rationale <- paste0(
       "Low-moderate missingness. 'neutral' scoring (sim=0.5 on missing ",
       "pairs) is a safe, principled default that avoids the both-null=1 ",
-      "artefact.",
+      "artifact.",
       if (entity_corr_unknown && has_entity_ids)
         " ICC unknown; run mv_entity_correlation() to refine this recommendation."
       else if (!has_entity_ids)
         " Entity labels absent; ICC-based refinement not possible."
       else
         ""
+    )
+  }
+
+  # Native-MV classifiers handle NAs themselves; skip imputation entirely
+  if (classifier == "tree_native") {
+    imputer_strategy <- "none"
+    rationale <- paste0(
+      "Native-MV classifier requested (e.g. xgboost, lightgbm, ranger): ",
+      "imputation skipped (strategy = 'none'). ",
+      "Residual NAs in the feature matrix are left for the classifier's ",
+      "native missing-value mechanism. ",
+      "Field-comparison method '", field_method, "' still applied to ",
+      "avoid the both-null=1 artifact at the similarity-computation stage."
     )
   }
 

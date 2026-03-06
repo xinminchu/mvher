@@ -1,0 +1,922 @@
+%% =========================================================================
+%%  mvher: Missing-Value Handling for Entity Resolution in R
+%%  Submitted to The R Journal
+%%  Author: Xinmin Chu
+%% =========================================================================
+\documentclass[a4paper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{RJournal}
+\usepackage{amsmath,amssymb,array}
+\usepackage{booktabs}
+\usepackage{microtype}
+\usepackage{graphicx}
+\usepackage{natbib}
+
+\begin{document}
+
+\sectionhead{Contributed research article}
+\RJvolume{XX}
+\RJvolnumber{X}
+\RJmonth{XXXXX}
+
+\begin{article}
+
+%%  ── Title and author ───────────────────────────────────────────────────
+\title{\pkg{mvher}: Missing-Value Handling for Entity Resolution in R}
+
+\author{Xinmin Chu \and David Degras-Valabregue}
+\date{}
+
+\maketitle
+
+%%  ── Abstract ───────────────────────────────────────────────────────────
+\RJabstract{%
+Missing values are common in entity resolution (ER) and record
+linkage applications, yet most pipelines handle them inconsistently---
+either ignoring them or applying generic imputation rules designed for
+non-relational settings. A particularly subtle artifact arises from
+standard string-similarity metrics such as Jaro-Winkler and Levenshtein:
+two empty strings are scored as \emph{perfectly} similar (similarity~$=
+1$), sending a spurious ``definite match'' signal to any classifier that
+consumes pairwise features. Under entity-disjoint train/test
+evaluation---the methodologically correct protocol for ER---this
+artifact causes systematic covariate shift when missingness is
+concentrated within certain entities. We introduce \pkg{mvher}, an R
+package that addresses these problems through a principled, ER-specific
+framework. The package provides (i)~four diagnostic functions for
+measuring missingness rates, detecting the underlying mechanism (MCAR,
+MAR, or MNAR), and quantifying entity-level intra-class correlation of
+missingness; (ii)~eight field-level comparison strategies that handle
+empty and \texttt{NA} values explicitly during pairwise similarity
+computation; (iii)~seven feature-matrix imputation strategies with a
+fit-on-training/apply-to-test API that prevents data leakage; and
+(iv)~an automated recommendation engine that selects the best strategy
+combination from data characteristics. We illustrate the package on
+synthetic and real-world benchmarks and show that the \texttt{"full"}
+comparison strategy---neutral similarity plus binary missingness
+indicators---substantially reduces bias in link probability estimates
+compared to the naive both-null-equals-one default.
+\pkg{mvher} is available at \url{https://github.com/xinminchu/mvher}.
+}
+
+%%  ── 1. Introduction ────────────────────────────────────────────────────
+\section{Introduction}
+
+Entity resolution (ER)---also known as \emph{record linkage}
+\citep{Newcombe1959}, \emph{deduplication} \citep{Christen2012}, or
+\emph{entity matching} \citep{Mudgal2018}---is the task of identifying
+records across one or more databases that refer to the same real-world
+entity. Applications span patient record integration in clinical
+systems, bibliographic deduplication, business register linkage, and
+product catalog consolidation \citep{Christophides2020}.
+
+A standard supervised ER pipeline has three stages.  First,
+\emph{blocking} restricts pairwise comparisons to candidate pairs within
+homogeneous ``blocks,'' reducing the quadratic cost to a manageable
+number of comparisons \citep{Christen2012}.  Second, for each candidate
+pair, \emph{field comparison} computes pairwise string similarities
+across shared fields (name, address, date of birth, etc.) to produce a
+feature vector.  Third, a \emph{classifier} scores each candidate pair
+as a match or non-match; the resulting decisions are grouped into
+entity clusters.
+
+Missing values enter this pipeline at the field-comparison stage.
+Administrative records, scraped web data, and integrated
+multi-source tables routinely contain fields that are empty or
+\texttt{NA} for a significant fraction of records.  Despite this, the
+treatment of missing values is rarely discussed in ER methodological
+papers, and the default behavior of popular R packages is to score two
+empty strings as perfectly similar (Jaro-Winkler or Levenshtein
+similarity~$= 1$).
+
+This default produces two distinct failure modes.
+
+\begin{enumerate}
+  \item \textbf{Signal corruption.} A pair of records that are both
+    missing a field receives a similarity of~$1$ for that field---the
+    same score as two identical non-empty strings. Any classifier that
+    uses this feature will learn a spuriously large positive weight for
+    the field, inflating estimated match probabilities for pairs that
+    share a missing value.
+
+  \item \textbf{Covariate shift under entity-disjoint splits.}
+    Entity-disjoint evaluation---where training and test entities are
+    disjoint---is the correct protocol for ER, because it mirrors
+    deployment conditions in which the classifier encounters entirely
+    new entities \citep{Murray2016, Christen2012}. When missingness is
+    entity-correlated (e.g., one data source systematically omits a
+    field for certain entities), entities that are missing in the test
+    set were not seen during training. The spurious both-null-$= 1$
+    signal then has a different marginal distribution at test time than
+    at train time, creating covariate shift that degrades classifier
+    performance in a way that is invisible under record-disjoint
+    evaluation.
+\end{enumerate}
+
+There is a rich literature on handling missing data in general
+statistical settings \citep{Rubin1976, LittleRubin2002, vanBuuren2018},
+but very little guidance specific to the pairwise-comparison structure
+of ER pipelines. The field-level strategies developed for the
+Fellegi-Sunter model \citep{FellegiSunter1969} encode a three-level
+comparison ($\gamma = 0$: no agreement, $\gamma = 1$: partial agreement,
+$\gamma = 2$: full agreement) that naturally accommodates missing fields,
+but this encoding is rarely implemented correctly in practice and does
+not integrate cleanly with modern machine-learning classifiers that
+expect continuous features.
+
+We present \pkg{mvher}, an R package that fills this gap. The package is
+designed around four principles:
+
+\begin{enumerate}
+  \item \textbf{Transparency.} Every strategic choice made about missing
+    values is made explicit and documented, not buried inside a helper
+    function.
+  \item \textbf{Leakage prevention.} Imputation parameters are always
+    estimated on training data and applied without re-estimation to test
+    data, preventing the subtle leakage that arises when test-set
+    statistics inform imputed training values.
+  \item \textbf{ER-native strategies.} The package includes comparison
+    strategies---neutral similarity, asymmetric handling, Fellegi-Sunter
+    encoding, and binary missingness indicators---that are specifically
+    motivated by the pairwise structure of ER feature extraction, not
+    by general tabular imputation.
+  \item \textbf{Guided selection.} An automated recommendation engine
+    maps data characteristics (missingness rate, entity-level
+    correlation, split type) to the appropriate strategy combination,
+    reducing the burden on practitioners who may be unfamiliar with the
+    theoretical foundations.
+\end{enumerate}
+
+The rest of this paper is organized as follows. Section~\ref{sec:bg}
+reviews ER pipelines, missingness mechanisms, and the
+both-null artifact that motivates the package. Section~\ref{sec:pkg}
+provides an overview of the \pkg{mvher} package design and API.
+Sections~\ref{sec:diag}--\ref{sec:recommend} walk through each module
+in detail with reproducible R code.  Section~\ref{sec:casestudy}
+presents an end-to-end case study illustrating the full workflow.
+Section~\ref{sec:compare} positions \pkg{mvher} relative to existing
+packages.  Section~\ref{sec:summary} summarizes contributions and
+outlines directions for future work.
+
+%%  ── 2. Background ──────────────────────────────────────────────────────
+\section{Background}
+\label{sec:bg}
+
+\subsection{Entity resolution pipelines}
+
+The supervised ER pipeline produces a feature matrix $\mathbf{X}$ whose
+row $k$ corresponds to candidate pair $(i, j)$, and whose columns
+are pairwise similarity scores $s_f(r_i, r_j)$ for each field $f$.
+Under the Fellegi-Sunter model \citep{FellegiSunter1969}, records are
+classified by comparing the likelihood ratio of the comparison vector
+$\boldsymbol{\gamma}$ under the match and non-match populations.
+Modern supervised alternatives train logistic regression, random
+forests, gradient boosting, or neural network classifiers on labeled
+pairs \citep{Christophides2020, Mudgal2018}.
+
+Evaluation requires held-out data.  We focus on
+\emph{entity-disjoint} evaluation, where all records belonging to a
+random subset of entities are reserved as the test set
+\citep{Murray2016}.  Under this protocol, when missingness is
+concentrated within certain entities, the training and test feature
+distributions can differ systematically---a problem we return to in
+Section~\ref{sec:bg:artifact}.
+
+\subsection{Missingness mechanisms}
+
+\citet{Rubin1976} classified missing-data mechanisms into three types,
+a taxonomy that directly informs the choice of handling strategy.
+
+\begin{description}
+  \item[MCAR (Missing Completely At Random).] The probability that a
+    value is missing is independent of any data values, observed or
+    unobserved.  Listwise deletion and mean imputation are consistent
+    under MCAR.
+
+  \item[MAR (Missing At Random).] The probability of missingness can
+    depend on observed values but not on the missing value itself.
+    Most multiple imputation methods are valid under MAR.
+
+  \item[MNAR (Missing Not At Random).] The probability of missingness
+    depends on the unobserved value.  No imputation method can
+    fully recover from MNAR without additional assumptions.
+\end{description}
+
+In ER settings, MNAR is common: a field is often absent because the
+underlying value is unknown, not because it was randomly omitted.
+More critically, missingness is frequently \emph{entity-correlated}:
+an entire record from a particular data source may lack a field because
+that source does not collect it.  This entity-level clustering of
+missingness can be quantified by the intra-class correlation coefficient
+(ICC) of the missingness indicator with respect to entity membership
+\citep{ShroutFleiss1979}.  When the ICC is high and the evaluation uses
+entity-disjoint splits, the field-comparison features in training and
+test sets have systematically different marginal distributions, creating
+covariate shift.
+
+\subsection{The both-null artifact}
+\label{sec:bg:artifact}
+
+Let $d(s, t)$ denote a string edit distance (e.g., normalized
+Levenshtein), and let $\mathrm{sim}(s, t) = 1 - d(s, t)$ be the
+corresponding similarity.  For any standard metric, $d(\epsilon,
+\epsilon) = 0$, so $\mathrm{sim}(\epsilon, \epsilon) = 1$ for the empty
+string~$\epsilon$.  Similarly, $\mathrm{JW}(\epsilon, \epsilon) = 1$
+under the Jaro-Winkler definition \citep{Jaro1989, Winkler1990}.
+
+When both records in a pair are missing a field, this convention
+assigns a similarity of~1---identical to the score two records would
+receive if they shared the same non-empty value for that field. A logistic
+regression or other linear classifier that receives this signal will
+learn a positive weight for the field, associating high similarity with
+match status. Pairs that are both missing the field will therefore
+receive an inflated predicted match probability, even if they are not
+the same entity.
+
+This problem is made worse when, under entity-disjoint splits, the
+both-missing rate is substantially higher at test time than at training
+time (because the test entities have a higher base rate of missingness
+for that field). The classifier's decision boundary was calibrated on
+training data where the spurious signal appeared less often; it will be
+systematically poorly calibrated on test data.
+
+%%  ── 3. Package overview ────────────────────────────────────────────────
+\section{Package overview}
+\label{sec:pkg}
+
+\pkg{mvher} is available on GitHub at
+\url{https://github.com/xinminchu/mvher} and can be installed with:
+
+\begin{example}
+# install.packages("remotes")
+remotes::install_github("xinminchu/mvher")
+\end{example}
+
+The package requires R~$\geq 4.0.0$ and depends on
+\CRANpkg{data.table} \citep{datatable} for memory-efficient data
+manipulation and \CRANpkg{stringdist} \citep{stringdist} for string
+similarity computation.  It exports 13~functions organized into four
+modules:
+
+\begin{description}
+  \item[\textbf{Diagnosis}] (\texttt{mv\_field\_summary},
+    \texttt{mv\_pair\_summary}, \texttt{mv\_detect\_mechanism},
+    \texttt{mv\_entity\_correlation}): characterize the extent, pattern,
+    and mechanism of missingness in a record set.
+
+  \item[\textbf{Field comparison}] (\texttt{mv\_compare\_fields},
+    \texttt{mv\_pair\_features}): compute pairwise string similarity
+    features with explicit control over missing-value behavior.
+
+  \item[\textbf{Imputation}] (\texttt{mv\_fit\_imputer},
+    \texttt{mv\_apply\_imputer}, \texttt{mv\_impute}): fill residual
+    \texttt{NA}s in feature matrices with a fit-once/apply-many API.
+
+  \item[\textbf{Strategy guidance}] (\texttt{mv\_strategy\_table},
+    \texttt{mv\_recommend}): enumerate available strategies and
+    automatically select the best combination.
+\end{description}
+
+A utility function \texttt{norm\_str()} performs standard text
+normalization (lowercasing, trimming, whitespace collapsing,
+\texttt{NA} coercion to empty string) and is exported for use in user
+preprocessing pipelines.
+
+The four modules are composed sequentially in a typical pipeline:
+diagnose $\to$ compare fields $\to$ impute residual NAs $\to$ classify.
+
+%%  ── 4. Diagnosing missingness ──────────────────────────────────────────
+\section{Diagnosing missingness}
+\label{sec:diag}
+
+The first step in any principled missing-value strategy is to understand
+the extent and structure of missingness in the data. \pkg{mvher}
+provides four diagnostic functions for this purpose.
+
+\subsection{Field-level and pair-level summaries}
+
+\texttt{mv\_field\_summary()} returns per-column missingness rates,
+counting both \texttt{NA} and empty strings (\texttt{""}) as missing:
+
+\begin{example}
+library(mvher)
+
+records <- data.frame(
+  id        = 1:6,
+  entity_id = c(1L, 1L, 2L, 2L, 3L, 3L),
+  name      = c("Alice Smith", "Alice Smyth", NA,
+                "Bob Jones", "", "Carol White"),
+  city      = c("London", "Londen", "Paris", NA, "Rome", "Roma"),
+  stringsAsFactors = FALSE
+)
+
+mv_field_summary(records, c("name", "city"))
+#>    column n_total n_empty  pct_miss
+#> 1:   name       6       2 0.3333333
+#> 2:   city       6       1 0.1666667
+\end{example}
+
+At the pair level, \texttt{mv\_pair\_summary()} reports how many
+candidate pairs are affected by missingness in each field, broken down
+by whether one or both records are missing:
+
+\begin{example}
+pairs <- data.frame(id1 = c(1, 2, 3, 5), id2 = c(2, 4, 4, 6))
+mv_pair_summary(records, pairs, c("name", "city"))
+#>    column n_pairs any_missing both_missing one_missing
+#> 1:   name       4           3            1           2
+#> 2:   city       4           1            0           1
+\end{example}
+
+This pair-level view is more directly informative than the record-level
+summary: a high \texttt{both\_missing} count for a field indicates that
+the both-null artifact will affect many candidate pairs.
+
+\subsection{Mechanism detection}
+
+\texttt{mv\_detect\_mechanism()} applies a chi-squared test of
+independence between the missingness indicator for each field and entity
+membership. The test is approximate---it treats the entity column as a
+categorical factor and uses the Pearson $\chi^2$ statistic---but it
+provides a useful first-pass signal:
+
+\begin{example}
+mv_detect_mechanism(records, c("name", "city"))
+#>    column overall_miss_rate entity_miss_variance chi_sq_p mechanism
+#> 1:   name         0.3333333            0.1666667 0.135335   unknown
+#> 2:   city         0.1666667            0.1666667 0.135335   unknown
+\end{example}
+
+The \texttt{mechanism} column is classified as \texttt{"MCAR"} when the
+chi-squared p-value exceeds the significance threshold $\alpha$ (default
+$0.05$); \texttt{"MAR/MNAR"} when $p < \alpha$; and \texttt{"unknown"}
+when the test cannot be performed (e.g., too few records per entity).
+
+\subsection{Entity-level intra-class correlation}
+
+The most diagnostic measure for the entity-disjoint split problem is the
+intra-class correlation coefficient (ICC) of the missingness indicator
+with respect to entity membership. \pkg{mvher} computes a one-way ICC
+following \citet{ShroutFleiss1979}:
+
+\begin{equation}
+\mathrm{ICC} = \frac{\hat{\sigma}^2_{\text{between}}}
+               {\hat{\sigma}^2_{\text{between}} + \hat{\sigma}^2_{\text{within}}},
+\label{eq:icc}
+\end{equation}
+
+where $\hat{\sigma}^2_{\text{between}}$ and
+$\hat{\sigma}^2_{\text{within}}$ are the between-entity and
+within-entity variance components of a one-way ANOVA on the binary
+missingness indicator, estimated by the method of moments.
+
+\texttt{mv\_entity\_correlation()} returns the ICC and an interpretation
+label:
+
+\begin{example}
+mv_entity_correlation(records, c("name", "city"))
+#>    column  icc interpretation
+#> 1:   name 0.50 high (MNAR-like)
+#> 2:   city 0.25 moderate (MAR-like)
+\end{example}
+
+An ICC $> 0.3$ indicates that missingness is substantially clustered
+within entities. When combined with entity-disjoint splits, this signals
+high risk of covariate shift and recommends the use of the
+\texttt{"full"} comparison strategy (Section~\ref{sec:field}).
+
+%%  ── 5. Field-comparison strategies ────────────────────────────────────
+\section{Field-comparison strategies}
+\label{sec:field}
+
+\texttt{mv\_compare\_fields(xa, xb, method, ...)} computes pairwise
+similarities between two character vectors \texttt{xa} and \texttt{xb}
+under one of eight strategies, specified by the \texttt{method}
+argument. The function always returns Jaro-Winkler (\texttt{jw}) and
+normalized Levenshtein (\texttt{lv}) similarities along with binary
+indicators \texttt{any\_miss} and \texttt{both\_miss}, with additional
+outputs depending on the strategy.
+
+Table~\ref{tab:strategies} summarizes the eight strategies and their
+key properties.
+
+\begin{table}[ht]
+\centering
+\caption{Field-comparison strategies in \pkg{mvher}. ``MNAR-safe''
+  means the strategy does not assign a spuriously high similarity to
+  both-missing pairs. ``Adds features'' means extra indicator or
+  encoding columns are appended to the feature vector.}
+\label{tab:strategies}
+\smallskip
+\begin{tabular}{lp{4.8cm}cc}
+\toprule
+\textbf{Method} & \textbf{Behavior for missing fields}
+  & \textbf{MNAR-safe} & \textbf{Adds features} \\
+\midrule
+\texttt{"current"}       & both-empty $\to$ sim$=1$; else raw sim  & No  & No \\
+\texttt{"neutral"}       & any-empty $\to$ sim$=0.5$               & Yes & No \\
+\texttt{"zero"}          & any-empty $\to$ sim$=0$                 & Yes & No \\
+\texttt{"asymmetric"}    & both-empty $\to 0$; one-empty $\to 0.5$ & Yes & No \\
+\texttt{"indicator"}     & raw sim $+$ \texttt{any\_miss}/\texttt{both\_miss} & Partial & Yes \\
+\texttt{"full"}          & neutral sim $+$ \texttt{any\_miss}/\texttt{both\_miss} & Yes & Yes \\
+\texttt{"fellegi\_sunter"} & integer $\gamma$-level encoding 0--4  & Yes & Yes \\
+\texttt{"complete\_cases"} & any-empty $\to$ \texttt{NA}           & Yes & No \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The following example shows the behavior of five methods on a short
+vector with one non-missing, one partially-missing, and one
+both-missing pair:
+
+\begin{example}
+xa <- c("Alice Smith", "Bob Jones", "",     "")
+xb <- c("Alice Smyth", "Robert J.", "Carol", "")
+
+# Default: both-empty scores 1 (the both-null artifact)
+mv_compare_fields(xa, xb, method = "current")$jw
+#> [1] 0.9666667 0.8162963 0.0000000 1.0000000
+
+# Neutral: both-empty -> 0.5, one-empty -> 0.5
+mv_compare_fields(xa, xb, method = "neutral")$jw
+#> [1] 0.9666667 0.8162963 0.5000000 0.5000000
+
+# Zero: any missing -> 0
+mv_compare_fields(xa, xb, method = "zero")$jw
+#> [1] 0.9666667 0.8162963 0.0000000 0.0000000
+
+# Asymmetric: both-empty -> 0, one-empty -> 0.5
+mv_compare_fields(xa, xb, method = "asymmetric")$jw
+#> [1] 0.9666667 0.8162963 0.5000000 0.0000000
+
+# Fellegi-Sunter integer gamma levels (0 = absent, 4 = full agreement)
+mv_compare_fields(xa, xb, method = "fellegi_sunter")$gamma
+#> [1] 4 3 0 0
+\end{example}
+
+\subsection{The \texttt{"full"} strategy}
+
+The recommended strategy for entity-disjoint settings with
+entity-correlated missingness is \texttt{"full"}. It combines a neutral
+similarity score (missing $\to 0.5$) with explicit binary indicators:
+
+\begin{example}
+res <- mv_compare_fields(xa, xb, method = "full")
+res
+#> $jw
+#> [1] 0.9666667 0.8162963 0.5000000 0.5000000
+#>
+#> $lv
+#> [1] 0.8333333 0.4444444 0.5000000 0.5000000
+#>
+#> $any_miss
+#> [1] 0 0 1 1
+#>
+#> $both_miss
+#> [1] 0 0 0 1
+\end{example}
+
+The classifier receives a neutral similarity of~0.5 for all pairs
+involving a missing field (neither a positive nor a negative signal for
+the match decision based on similarity alone), and the indicator columns
+allow the model to learn a negative weight for the \texttt{both\_miss}
+indicator---correcting the bias rather than suppressing information.
+
+\subsection{Building a feature matrix}
+
+\texttt{mv\_pair\_features(d, pairs, text\_cols, method, ...)} applies a
+comparison strategy across all pairs in a candidate set to produce the
+full $n_{\text{pairs}} \times p$ feature matrix used by classifiers:
+
+\begin{example}
+feats_full <- mv_pair_features(records, pairs,
+                               text_cols = c("name", "city"),
+                               method    = "full")
+feats_full$X
+#>    name_jw  name_lv name_any_miss name_both_miss  city_jw  city_lv
+#> 1: 0.966667 0.833333             0              0 0.930556 0.833333
+#> 2: 0.500000 0.500000             1              0 0.500000 0.500000
+#> 3: 0.500000 0.500000             1              1 0.500000 0.500000
+#> 4: 0.500000 0.500000             1              0 0.500000 0.500000
+#>    city_any_miss city_both_miss
+#> 1:             0              0
+#> 2:             1              0
+#> 3:             0              0
+#> 4:             0              0
+
+feats_full$y  # match labels
+#> [1] 1 0 0 0
+\end{example}
+
+The function pre-normalizes all text fields via \texttt{norm\_str()}
+before comparison, handles both \texttt{NA} and \texttt{""} as missing,
+and supports chunk-based processing for large candidate sets via the
+\texttt{chunk\_size} argument.
+
+%%  ── 6. Feature-matrix imputation ──────────────────────────────────────
+\section{Feature-matrix imputation}
+\label{sec:impute}
+
+Some comparison strategies---notably \texttt{"complete\_cases"} and
+\texttt{"indicator"}---can produce \texttt{NA} entries in the feature
+matrix that must be filled before passing data to a classifier.
+Additionally, users who chain \pkg{mvher} with their own similarity
+routines may obtain feature matrices with residual \texttt{NA}s from
+other sources.
+
+\pkg{mvher} provides seven imputation strategies for feature matrices,
+designed around a two-step fit/apply API that prevents leakage:
+
+\begin{example}
+Xtr <- data.frame(jw = c(0.9, NA, 0.3, 0.8),
+                  lv = c(NA, 0.7, 0.5, NA))
+Xte <- data.frame(jw = c(NA, 0.6),
+                  lv = c(0.4, NA))
+
+# Step 1: fit imputer on training data only
+imp <- mv_fit_imputer(Xtr, strategy = "mean")
+imp
+#> <mvher_imputer>
+#>   strategy : mean
+#>   columns  : jw lv
+#>   fill jw  : 0.6666667
+#>   fill lv  : 0.6000000
+
+# Step 2: apply to both sets using *training* statistics
+Xtr_clean <- mv_apply_imputer(Xtr, imp)
+Xte_clean <- mv_apply_imputer(Xte, imp)   # uses training means
+Xte_clean
+#>      jw   lv
+#> 1: 0.667 0.40
+#> 2: 0.600 0.60
+\end{example}
+
+The convenience wrapper \texttt{mv\_impute()} combines both steps:
+
+\begin{example}
+res <- mv_impute(Xtr, Xte, strategy = "median")
+res$X_test
+#>     jw  lv
+#> 1: 0.85 0.40
+#> 2: 0.60 0.60
+\end{example}
+
+Table~\ref{tab:impute} summarizes the seven strategies and their
+suitability for different scenarios.
+
+\begin{table}[ht]
+\centering
+\caption{Feature-matrix imputation strategies in \pkg{mvher}.}
+\label{tab:impute}
+\smallskip
+\begin{tabular}{lp{4.2cm}lp{2.5cm}}
+\toprule
+\textbf{Strategy} & \textbf{Fill value} & \textbf{MAR-valid}
+  & \textbf{Best for} \\
+\midrule
+\texttt{"mean"}      & Column mean (training)  & Yes & Low--moderate missingness \\
+\texttt{"median"}    & Column median (training) & Yes & Skewed distributions \\
+\texttt{"zero"}      & 0.0                     & No  & Conservative baselines \\
+\texttt{"half"}      & 0.5                     & No  & Neutral probability baseline \\
+\texttt{"hot\_deck"} & Random draw from training & Yes & Preserving marginal dist. \\
+\texttt{"knn"}       & $k$-NN Euclidean average & Yes & Entity-correlated missingness \\
+\texttt{"none"}      & No fill (NA retained)   & ---  & Tree-based classifiers \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The \texttt{"knn"} strategy is recommended when missingness exceeds
+$\approx 30\%$ and is entity-correlated (ICC $> 0.3$). For each row
+with missing values in the test set, the imputer locates the $k = 5$
+(default) nearest complete rows in the \emph{training} set (by
+Euclidean distance on observed columns) and fills missing values with
+their average.  Because the reference pool is always the training set,
+this is immune to leakage even when applied iteratively.
+
+\subsection{Skipping imputation for native-MV classifiers}
+\label{sec:impute:native}
+
+Imputation is not always necessary.  Several widely used tree-based
+classifiers handle \texttt{NA}s directly inside the learning algorithm,
+without requiring a complete feature matrix.
+\CRANpkg{xgboost} \citep{ChenGuestrin2016} and \CRANpkg{lightgbm}
+\citep{Ke2017} learn, at each tree node, the branch direction that
+minimizes the loss function for missing-valued observations; the
+direction is then reused at prediction time.
+\CRANpkg{ranger} \citep{WrightZiegler2017} supports a similar
+learned-direction mechanism via \texttt{na.action = "na.learn"}.
+Classical random forests \citep{Breiman1984} fall back on
+surrogate splits---secondary variables that mimic the primary split
+when the primary value is missing.
+
+For these classifiers, passing \texttt{strategy = "none"} to
+\texttt{mv\_fit\_imputer()} (or \texttt{mv\_impute()}) leaves residual
+\texttt{NA}s in place, and the classifier handles them natively.  This
+avoids the risk of imputation introducing bias when missingness is
+entity-correlated.
+
+Critically, \emph{field-comparison strategy still matters even for
+native-MV classifiers}.  If \texttt{"current"} is used at the
+comparison stage, both-missing pairs enter the feature matrix with
+sim~$= 1$---a numerically complete, but semantically wrong, value that
+no native-NA mechanism can correct.  We therefore recommend pairing
+native-MV classifiers with \texttt{"indicator"} or \texttt{"full"}:
+the \texttt{both\_miss} indicator column gives the tree an explicit
+signal to learn a negative weight for both-missing pairs, while
+residual \texttt{NA}s from the continuous similarity columns are
+handled natively.
+
+\texttt{mv\_recommend()} supports this workflow via the
+\texttt{classifier = "tree\_native"} argument:
+
+\begin{example}
+rec <- mv_recommend(field_miss_rate = 0.25, entity_corr = 0.6,
+                    split_type = "entity",
+                    classifier = "tree_native")
+print(rec)
+#> mvher recommendation
+#>   field_method    : full
+#>   imputer_strategy: none
+#>   rationale:
+#>     Native-MV classifier requested (e.g. xgboost, lightgbm, ranger):
+#>     imputation skipped (strategy = 'none'). Residual NAs in the
+#>     feature matrix are left for the classifier's native
+#>     missing-value mechanism. Field-comparison method 'full' still
+#>     applied to avoid the both-null=1 artifact.
+\end{example}
+
+%%  ── 7. Strategy recommendation ────────────────────────────────────────
+\section{Strategy recommendation}
+\label{sec:recommend}
+
+\pkg{mvher} provides a strategy table and an automated recommendation
+engine to help practitioners select the appropriate combination of
+field-comparison method and imputation strategy.
+
+\texttt{mv\_strategy\_table()} returns a 15-row data frame covering all
+eight field-comparison methods and seven imputation strategies, with
+columns indicating whether each strategy is valid under MCAR, MAR, or
+MNAR; whether it adds features to the model; whether it requires
+entity labels; and its computational cost.
+
+\texttt{mv\_recommend()} encodes the following decision rules into an
+S3 object of class \texttt{mvher\_recommendation}:
+
+\begin{enumerate}
+  \item If the field missingness rate is $< 2\%$: use \texttt{"current"}
+    and \texttt{"mean"} (near-zero missingness; backward compatibility
+    with existing pipelines).
+  \item If the split is entity-disjoint and the entity ICC $> 0.3$:
+    use \texttt{"full"} (neutral sim~$+ $ indicators); use
+    \texttt{"knn"} imputation if missingness $\geq 30\%$, else
+    \texttt{"mean"}.
+  \item If the field missingness rate is $\geq 15\%$: use
+    \texttt{"neutral"} and \texttt{"mean"} (or \texttt{"knn"} if $\geq
+    30\%$).
+  \item Otherwise: use \texttt{"neutral"} and \texttt{"mean"}.
+\end{enumerate}
+
+\begin{example}
+# High entity-level correlation under entity-disjoint split
+rec <- mv_recommend(field_miss_rate = 0.25, entity_corr = 0.6,
+                    split_type = "entity")
+print(rec)
+#> <mvher_recommendation>
+#>   field_method     : full
+#>   imputer_strategy : mean
+#>   rationale        : Entity-disjoint split with high entity-level
+#>                      missingness correlation (ICC=0.60). Use 'full'
+#>                      to suppress the both-null artifact and expose
+#>                      missingness patterns as explicit features.
+\end{example}
+
+%%  ── 8. Case study ─────────────────────────────────────────────────────
+\section{End-to-end case study}
+\label{sec:casestudy}
+
+We demonstrate the full \pkg{mvher} workflow on a synthetic dataset of
+24 records (8 entities $\times$ 3 records each) with 20\% random
+name-field missingness and 15\% random city-field missingness.
+
+\begin{example}
+set.seed(42)
+n <- 24
+d <- data.frame(
+  id        = seq_len(n),
+  entity_id = rep(1:8, each = 3L),
+  name      = ifelse(runif(n) < 0.2, NA_character_,
+               paste0(sample(c("Smith","Jones","Brown","White"),
+                             n, TRUE), " ",
+                      sample(c("Alice","Bob","Carol","Dan"),
+                             n, TRUE))),
+  city      = ifelse(runif(n) < 0.15, "",
+               sample(c("London","Paris","Rome"), n, TRUE)),
+  stringsAsFactors = FALSE
+)
+\end{example}
+
+\textbf{Step 1: Diagnose.}
+
+\begin{example}
+mv_field_summary(d, c("name", "city"))
+#>    column n_total n_empty  pct_miss
+#> 1:   name      24       5 0.2083333
+#> 2:   city      24       4 0.1666667
+
+mv_entity_correlation(d, c("name", "city"))
+#>    column  icc interpretation
+#> 1:   name 0.19 low (MCAR-like)
+#> 2:   city 0.17 low (MCAR-like)
+\end{example}
+
+\textbf{Step 2: Recommend.}
+
+\begin{example}
+rec <- mv_recommend(field_miss_rate = c(0.21, 0.17),
+                    entity_corr = NULL,
+                    split_type  = "entity")
+cat(rec$field_method, "/", rec$imputer_strategy, "\n")
+#> neutral / mean
+\end{example}
+
+\textbf{Step 3: Entity-disjoint 70/30 split.}
+
+\begin{example}
+set.seed(1)
+ents     <- unique(d$entity_id)
+test_ent <- sample(ents, floor(0.3 * length(ents)))
+d_tr     <- d[!d$entity_id %in% test_ent, ]
+d_te     <- d[ d$entity_id %in% test_ent, ]
+\end{example}
+
+\textbf{Step 4: Enumerate all candidate pairs within each split and
+extract features.}
+
+\begin{example}
+make_all_pairs <- function(ids) {
+  ids <- sort(unique(ids)); n <- length(ids)
+  if (n < 2) return(data.frame(id1 = integer(), id2 = integer()))
+  data.frame(
+    id1 = rep(ids[-n], times = rev(seq_len(n - 1))),
+    id2 = unlist(lapply(2:n, function(i) ids[i:n]))
+  )
+}
+pairs_tr <- make_all_pairs(d_tr$id)
+pairs_te <- make_all_pairs(d_te$id)
+
+ftr <- mv_pair_features(d_tr, pairs_tr, c("name", "city"),
+                        method = rec$field_method)
+fte <- mv_pair_features(d_te, pairs_te, c("name", "city"),
+                        method = rec$field_method)
+\end{example}
+
+\textbf{Step 5: Impute feature matrices.}
+
+\begin{example}
+res <- mv_impute(ftr$X, fte$X, strategy = rec$imputer_strategy)
+
+# Training set: no NAs remain
+anyNA(res$X_train)
+#> [1] FALSE
+
+# Test set: filled using training-set means
+anyNA(res$X_test)
+#> [1] FALSE
+
+head(res$X_train, 3)
+#>    name_jw  name_lv  city_jw  city_lv
+#> 1: 0.500000 0.500000 0.944444 0.857143
+#> 2: 0.500000 0.500000 0.944444 0.857143
+#> 3: 0.888889 0.666667 0.944444 0.857143
+\end{example}
+
+\textbf{Step 6: Train a classifier and evaluate.}
+
+The resulting matrices \texttt{res\$X\_train} and
+\texttt{res\$X\_test}, together with the match labels \texttt{ftr\$y}
+and \texttt{fte\$y}, can be passed directly to any binary classifier in
+R.  For example, using logistic regression:
+
+\begin{example}
+train_df   <- cbind(res$X_train, match = ftr$y)
+test_df    <- cbind(res$X_test,  match = fte$y)
+
+fit <- glm(match ~ ., data = train_df, family = binomial)
+pred <- predict(fit, newdata = test_df, type = "response")
+
+# AUC (requires pROC)
+# pROC::auc(fte$y, pred)
+\end{example}
+
+This completes the end-to-end pipeline from raw records with missing
+values to a calibrated classifier output.
+
+%%  ── 9. Comparison with related packages ───────────────────────────────
+\section{Comparison with related packages}
+\label{sec:compare}
+
+Several R packages support entity resolution or missing-value handling,
+but none addresses the intersection targeted by \pkg{mvher}.
+
+\CRANpkg{RecordLinkage} \citep{Sariyar2010} provides blocking,
+comparison, and classification tools for ER, including the
+\texttt{jarowinkler} and \texttt{levenshtein} comparison functions.
+However, missing values are handled by \texttt{NA} propagation: any
+pair involving a missing field receives \texttt{NA} for that field's
+similarity, which is then filled by the user (typically with zero or
+dropped entirely). No ER-specific strategy is offered.
+
+\CRANpkg{fastLink} \citep{Enamorado2019} implements the Fellegi-Sunter
+model with EM estimation of match and non-match parameters. It encodes a
+three-level comparison that partially accommodates missingness, but the
+gamma encoding is directly tied to the Fellegi-Sunter likelihood and
+is not easily adapted to machine-learning classifiers.
+
+\CRANpkg{mice} \citep{vanBuuren2018} and \CRANpkg{missForest}
+\citep{Stekhoven2012} provide state-of-the-art multiple imputation for
+general tabular data. They operate on wide record tables, not on
+pairwise feature matrices, and neither is aware of the ER-specific
+both-null artifact or the leakage risk under entity-disjoint splits.
+
+\pkg{mvher} complements these packages by operating specifically at the
+field-comparison and feature-extraction stages of the ER pipeline.  It
+can be combined with blocking from \CRANpkg{RecordLinkage} or
+\pkg{GCMER} \citep{Degras2025} and classification from any standard
+R package (e.g., \CRANpkg{glmnet}, \CRANpkg{ranger}).
+
+Table~\ref{tab:compare} summarizes the key distinctions.
+
+\begin{table}[ht]
+\centering
+\caption{Comparison of R packages for entity resolution and
+  missing-value handling.}
+\label{tab:compare}
+\smallskip
+\begin{tabular}{lcccc}
+\toprule
+\textbf{Package} & \textbf{ER pipeline} & \textbf{MV at comparison}
+  & \textbf{Leakage-safe API} & \textbf{Both-null fix} \\
+\midrule
+\pkg{RecordLinkage} & Yes & Partial (NA propagation) & No  & No  \\
+\pkg{fastLink}      & Yes & Partial (FS only)         & No  & Partial \\
+\pkg{mice}          & No  & No (record-level)        & No  & No  \\
+\pkg{mvher}         & No  & Yes (8 strategies)       & Yes & Yes \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+%%  ── 10. Summary ───────────────────────────────────────────────────────
+\section{Summary}
+\label{sec:summary}
+
+We have presented \pkg{mvher}, an R package for principled missing-value
+handling in entity resolution pipelines. The package addresses a
+concrete, often overlooked failure mode: the spurious both-null-$=1$
+similarity score produced by standard string metrics, which inflates
+estimated match probabilities and creates covariate shift under
+entity-disjoint evaluation. The \texttt{"full"} comparison strategy
+(neutral similarity plus binary missingness indicators), combined with
+the leakage-safe fit/apply imputation API, provides a practical
+remedy that integrates cleanly with any downstream classifier.
+
+The key contributions of \pkg{mvher} are:
+
+\begin{enumerate}
+  \item A unified, ER-aware framework for diagnosing, quantifying, and
+    handling missing values at the field-comparison stage.
+  \item An eight-strategy field-comparison API that makes the treatment
+    of missing values an explicit, documented modeling choice rather
+    than an implicit default.
+  \item A seven-strategy feature-matrix imputation API with a
+    fit-on-training/apply-to-test design that prevents data leakage
+    under entity-disjoint splits.
+  \item An automated recommendation engine that maps data
+    characteristics to strategy combinations, lowering the
+    barrier for practitioners unfamiliar with the theoretical
+    foundations.
+\end{enumerate}
+
+Future work will extend the package in several directions.  First, the
+current diagnosis functions are heuristic; a more principled test for
+entity-correlated missingness under the ER data-generating model would
+improve the accuracy of the recommendation engine.  Second, the
+imputation module currently handles feature-matrix NAs only; incorporating
+record-level imputation of raw fields before comparison would allow a
+more comprehensive two-stage approach.  Third, benchmarks on real-world
+ER datasets with controlled missingness rates would quantify the
+practical benefit of the \texttt{"full"} strategy relative to the
+\texttt{"current"} default across a range of classifiers and missingness
+levels.
+
+%%  ── Acknowledgments ───────────────────────────────────────────────────
+%\section*{Acknowledgments}
+
+
+
+%%  ── Bibliography ──────────────────────────────────────────────────────
+\bibliographystyle{abbrvnat}
+\bibliography{mvher}
+
+\end{article}
+\end{document}

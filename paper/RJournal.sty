@@ -1,0 +1,52 @@
+%% Minimal RJournal.sty compatibility stub
+%% Replace with official version from: install.packages("rjtools")
+\NeedsTeXFormat{LaTeX2e}
+\ProvidesPackage{RJournal}[2024/01/01 R Journal stub]
+
+\usepackage[a4paper,top=3cm,bottom=3cm,left=2.5cm,right=2.5cm]{geometry}
+\usepackage{lmodern}
+\usepackage[hidelinks]{hyperref}
+\usepackage{parskip}
+\setlength{\parskip}{6pt}
+\setlength{\parindent}{0pt}
+
+%% Journal header commands (no-ops in draft)
+\newcommand{\sectionhead}[1]{}
+\newcommand{\RJvolume}[1]{}
+\newcommand{\RJvolnumber}[1]{}
+\newcommand{\RJmonth}[1]{}
+
+%% article environment
+\newenvironment{article}{}{}
+
+%% Abstract as a command (different from abstract environment)
+\newcommand{\RJabstract}[1]{%
+  \begin{center}\begin{minipage}{0.9\textwidth}
+  \small\itshape #1
+  \end{minipage}\end{center}\bigskip}
+
+%% Inline formatting
+\newcommand{\pkg}[1]{\textbf{#1}}
+\newcommand{\CRANpkg}[1]{\textbf{#1}}
+\newcommand{\BIOpkg}[1]{\textbf{#1}}
+\newcommand{\code}[1]{\texttt{#1}}
+\newcommand{\email}[1]{\href{mailto:#1}{\texttt{#1}}}
+
+%% Code example environment
+\usepackage{xcolor}
+\usepackage{listings}
+\lstnewenvironment{example}{%
+  \lstset{language=R,basicstyle=\small\ttfamily,
+    backgroundcolor=\color{gray!10},frame=single,
+    framesep=3pt,xleftmargin=6pt,xrightmargin=6pt,
+    breaklines=true,showstringspaces=false,
+    commentstyle=\color{gray}}}{}
+
+%% Address block
+\newcommand{\address}[1]{\bigskip\noindent\textit{#1}\par}
+
+%% Section headings
+\usepackage{titlesec}
+\titleformat{\section}{\large\bfseries}{\thesection}{1em}{}
+\titleformat{\subsection}{\normalsize\bfseries}{\thesubsection}{1em}{}
+\titleformat{\subsubsection}{\normalsize\itshape}{\thesubsubsection}{1em}{}

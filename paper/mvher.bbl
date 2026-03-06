@@ -1,0 +1,158 @@
+\begin{thebibliography}{22}
+\providecommand{\natexlab}[1]{#1}
+\providecommand{\url}[1]{\texttt{#1}}
+\expandafter\ifx\csname urlstyle\endcsname\relax
+  \providecommand{\doi}[1]{doi: #1}\else
+  \providecommand{\doi}{doi: \begingroup \urlstyle{rm}\Url}\fi
+
+\bibitem[Breiman et~al.(1984)Breiman, Friedman, Olshen, and Stone]{Breiman1984}
+L.~Breiman, J.~H. Friedman, R.~A. Olshen, and C.~J. Stone.
+\newblock \emph{Classification and Regression Trees}.
+\newblock Chapman and Hall/CRC, Boca Raton, FL, 1984.
+
+\bibitem[Chen and Guestrin(2016)]{ChenGuestrin2016}
+T.~Chen and C.~Guestrin.
+\newblock {XGBoost}: A scalable tree boosting system.
+\newblock In \emph{Proceedings of the 22nd ACM SIGKDD International Conference
+  on Knowledge Discovery and Data Mining}, pages 785--794, 2016.
+\newblock \doi{10.1145/2939672.2939785}.
+
+\bibitem[Christen(2012)]{Christen2012}
+P.~Christen.
+\newblock \emph{Data Matching: Concepts and Techniques for Record Linkage,
+  Entity Resolution, and Duplicate Detection}.
+\newblock Springer, Berlin, 2012.
+\newblock \doi{10.1007/978-3-642-31164-2}.
+
+\bibitem[Christophides et~al.(2021)Christophides, Efthymiou, Palpanas,
+  Papadakis, and Stefanidis]{Christophides2020}
+V.~Christophides, V.~Efthymiou, T.~Palpanas, G.~Papadakis, and K.~Stefanidis.
+\newblock An overview of end-to-end entity resolution for big data.
+\newblock \emph{ACM Computing Surveys}, 53\penalty0 (6):\penalty0
+  127:1--127:42, 2021.
+\newblock \doi{10.1145/3418896}.
+
+\bibitem[Degras-Valabregue and Chu(2025)]{Degras2025}
+D.~Degras-Valabregue and X.~Chu.
+\newblock \pkg{GCMER}: Graph coloring methods for entity resolution in {R}.
+\newblock \emph{The R Journal}, 2025.
+\newblock Under review.
+
+\bibitem[Dowle and Srinivasan(2023)]{datatable}
+M.~Dowle and A.~Srinivasan.
+\newblock \emph{{data.table}: Extension of `{data.frame}`}, 2023.
+\newblock URL \url{https://CRAN.R-project.org/package=data.table}.
+\newblock R package version 1.14.10.
+
+\bibitem[Enamorado et~al.(2019)Enamorado, Fifield, and Imai]{Enamorado2019}
+T.~Enamorado, B.~Fifield, and K.~Imai.
+\newblock Using a probabilistic model to assist merging of large-scale
+  administrative records.
+\newblock \emph{American Political Science Review}, 113\penalty0 (2):\penalty0
+  353--371, 2019.
+\newblock \doi{10.1017/S0003055418000783}.
+
+\bibitem[Fellegi and Sunter(1969)]{FellegiSunter1969}
+I.~P. Fellegi and A.~B. Sunter.
+\newblock A theory for record linkage.
+\newblock \emph{Journal of the American Statistical Association}, 64\penalty0
+  (328):\penalty0 1183--1210, 1969.
+\newblock \doi{10.1080/01621459.1969.10501049}.
+
+\bibitem[Jaro(1989)]{Jaro1989}
+M.~A. Jaro.
+\newblock Advances in record-linkage methodology as applied to matching the
+  1985 census of tampa, florida.
+\newblock \emph{Journal of the American Statistical Association}, 84\penalty0
+  (406):\penalty0 414--420, 1989.
+\newblock \doi{10.1080/01621459.1989.10478785}.
+
+\bibitem[Ke et~al.(2017)Ke, Meng, Finley, Wang, Chen, Ma, Ye, and Liu]{Ke2017}
+G.~Ke, Q.~Meng, T.~Finley, T.~Wang, W.~Chen, W.~Ma, Q.~Ye, and T.-Y. Liu.
+\newblock {LightGBM}: A highly efficient gradient boosting decision tree.
+\newblock In \emph{Advances in Neural Information Processing Systems},
+  volume~30, 2017.
+
+\bibitem[Little and Rubin(2002)]{LittleRubin2002}
+R.~J.~A. Little and D.~B. Rubin.
+\newblock \emph{Statistical Analysis with Missing Data}.
+\newblock Wiley, Hoboken, NJ, 2nd edition, 2002.
+
+\bibitem[Mudgal et~al.(2018)Mudgal, Li, Rekatsinas, Das~Sarma, Park,
+  Krishnamurthy, Miller, Shi, and Doan]{Mudgal2018}
+S.~Mudgal, H.~Li, T.~Rekatsinas, A.~Das~Sarma, Y.~Park, G.~Krishnamurthy,
+  R.~Miller, S.~Shi, and A.~Doan.
+\newblock Deep learning for entity matching: A design space exploration.
+\newblock In \emph{Proceedings of the 2018 International Conference on
+  Management of Data (SIGMOD)}, pages 19--34, 2018.
+\newblock \doi{10.1145/3183713.3196926}.
+
+\bibitem[Murray(2016)]{Murray2016}
+J.~S. Murray.
+\newblock Probabilistic record linkage and deduplication after indexing,
+  blocking, and filtering.
+\newblock \emph{Journal of Privacy and Confidentiality}, 7\penalty0
+  (1):\penalty0 3--24, 2016.
+\newblock \doi{10.29012/jpc.v7i1.643}.
+
+\bibitem[Newcombe et~al.(1959)Newcombe, Kennedy, Axford, and
+  James]{Newcombe1959}
+H.~B. Newcombe, J.~M. Kennedy, S.~J. Axford, and A.~P. James.
+\newblock Automatic linkage of vital records.
+\newblock \emph{Science}, 130\penalty0 (3381):\penalty0 954--959, 1959.
+\newblock \doi{10.1126/science.130.3381.954}.
+
+\bibitem[Rubin(1976)]{Rubin1976}
+D.~B. Rubin.
+\newblock Inference and missing data.
+\newblock \emph{Biometrika}, 63\penalty0 (3):\penalty0 581--592, 1976.
+\newblock \doi{10.1093/biomet/63.3.581}.
+
+\bibitem[Sariyar and Borg(2010)]{Sariyar2010}
+M.~Sariyar and A.~Borg.
+\newblock The {RecordLinkage} package: Detecting errors in data.
+\newblock \emph{The R Journal}, 2\penalty0 (2):\penalty0 61--67, 2010.
+\newblock \doi{10.32614/RJ-2010-017}.
+
+\bibitem[Shrout and Fleiss(1979)]{ShroutFleiss1979}
+P.~E. Shrout and J.~L. Fleiss.
+\newblock Intraclass correlations: Uses in assessing rater reliability.
+\newblock \emph{Psychological Bulletin}, 86\penalty0 (2):\penalty0 420--428,
+  1979.
+\newblock \doi{10.1037/0033-2909.86.2.420}.
+
+\bibitem[Stekhoven and B{\"u}hlmann(2012)]{Stekhoven2012}
+D.~J. Stekhoven and P.~B{\"u}hlmann.
+\newblock {MissForest}---non-parametric missing value imputation for mixed-type
+  data.
+\newblock \emph{Bioinformatics}, 28\penalty0 (1):\penalty0 112--118, 2012.
+\newblock \doi{10.1093/bioinformatics/btr597}.
+
+\bibitem[{van Buuren}(2018)]{vanBuuren2018}
+S.~{van Buuren}.
+\newblock \emph{Flexible Imputation of Missing Data}.
+\newblock CRC Press, Boca Raton, FL, 2nd edition, 2018.
+\newblock URL \url{https://stefvanbuuren.name/fimd/}.
+
+\bibitem[van~der Loo(2014)]{stringdist}
+M.~P.~J. van~der Loo.
+\newblock The \pkg{stringdist} package for approximate string matching.
+\newblock \emph{The R Journal}, 6\penalty0 (1):\penalty0 111--122, 2014.
+\newblock \doi{10.32614/RJ-2014-011}.
+
+\bibitem[Winkler(1990)]{Winkler1990}
+W.~E. Winkler.
+\newblock String comparator metrics and enhanced decision rules in the
+  {Fellegi-Sunter} model of record linkage.
+\newblock In \emph{Proceedings of the Section on Survey Research Methods,
+  American Statistical Association}, pages 354--359, 1990.
+
+\bibitem[Wright and Ziegler(2017)]{WrightZiegler2017}
+M.~N. Wright and A.~Ziegler.
+\newblock \pkg{ranger}: A fast implementation of random forests for high
+  dimensional data in {C++} and {R}.
+\newblock \emph{Journal of Statistical Software}, 77\penalty0 (1):\penalty0
+  1--17, 2017.
+\newblock \doi{10.18637/jss.v077.i01}.
+
+\end{thebibliography}

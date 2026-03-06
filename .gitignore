@@ -18,3 +18,9 @@ vignettes/*.pdf
 
 # testthat artefacts
 tests/testthat/*.pdf
+
+# LaTeX build artifacts
+paper/*.aux
+paper/*.log
+paper/*.blg
+paper/*.out
